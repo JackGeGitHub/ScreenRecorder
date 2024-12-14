@@ -1,0 +1,165 @@
+一、下载初始版本的说明文档
+# ScreenRecorder
+## Android 5.0+ 屏幕录制
+从 Android 4.4 开始支持手机端本地录屏，但首先需要获取 root 权限才行，Android 5.0 引入 MediaProject，
+可以不用 root 就可以录屏，但需要弹权限获取窗口，需要用户允许才行，这里主要介绍 Android 5.0+ 利用
+MediaProject 在非 root 情况下实现屏幕录制。
+
+## 基本原理
+在 Android 5.0，Google 终于开放了视频录制的接口，其实严格来说，是屏幕采集的接口，也就是 MediaProjection
+和 MediaProjectionManager。
+
+## 具体实现步骤
+### 1 申请权限
+在 AndroidManifest 中添加权限
+```
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+<uses-permission android:name="android.permission.RECORD_AUDIO"/>
+```
+Android 6.0 加入的动态权限申请，如果应用的 `targetSdkVersion` 是 23，申请敏感权限还需要动态申请
+```
+if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    != PackageManager.PERMISSION_GRANTED) {
+  ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_REQUEST_CODE);
+}
+if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO)
+    != PackageManager.PERMISSION_GRANTED) {
+  ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.RECORD_AUDIO}, AUDIO_REQUEST_CODE);
+}
+```
+### 2 获取 MediaProjectionManager 实例
+`MediaProjectionManager ` 也是系统服务的一种，通过 `getSystemService` 来获取实例
+```
+MediaProjectionManager projectionManager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+```
+### 3 发起屏幕捕捉请求
+```
+Intent captureIntent= projectionManager.createScreenCaptureIntent(); 
+startActivityForResult(captureIntent, REQUEST_CODE);
+```
+### 4 获取 MediaProjection
+ 通过 `onActivityResult` 返回结果获取 `MediaProjection `
+```
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+  if (requestCode == RECORD_REQUEST_CODE && resultCode == RESULT_OK) {
+    mediaProjection = projectionManager.getMediaProjection(resultCode, data);
+  }
+}
+```
+### 5 创建虚拟屏幕
+这一步就是通过 `MediaProject` 录制屏幕的关键所在，`VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR` 参数是指创建屏幕镜像，所以我们实际录制内容的是屏幕镜像，但内容和实际屏幕是一样的，并且这里我们把 `VirtualDisplay` 的渲染目标 Surface 设置为 `MediaRecorder` 的 `getSurface`，后面我就可以通过 `MediaRecorder` 将屏幕内容录制下来，并且存成 video 文件
+
+```
+private void createVirtualDisplay() {
+  virtualDisplay = mediaProjection.createVirtualDisplay(
+        "MainScreen",
+        width,
+        height,
+        dpi,
+        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+        mediaRecorder.getSurface(),
+        null, null);
+}
+```
+### 6 录制屏幕数据
+这里利用 `MediaRecord` 将屏幕内容保存下来，当然也可以利用其它方式保存屏幕内容，例如：`ImageReader`
+```
+private void initRecorder() {
+  File file = new File(Environment.getExternalStorageDirectory(), System.currentTimeMillis() + ".mp4");
+  mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+  mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+  mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
+  mediaRecorder.setOutputFile(file.getAbsolutePath());
+  mediaRecorder.setVideoSize(width, height);
+  mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+  mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
+  mediaRecorder.setVideoEncodingBitRate(5 * 1024 * 1024);
+  mediaRecorder.setVideoFrameRate(30);
+  try {
+    mediaRecorder.prepare();
+  } catch (IOException e) {
+    e.printStackTrace();
+  }
+}
+
+public boolean startRecord() {
+  if (mediaProjection == null || running) {
+    return false;
+  }
+  initRecorder();
+  createVirtualDisplay();
+  mediaRecorder.start();
+  running = true;
+  return true;
+}
+```
+
+二、本人仓库学习的总结
+1、出现与高的 AndroidStudio 版本不兼容的Android Gradle Plugin 版本和 Gradle版本
+1.1、Android Studio Ladybug | 2024.2.1 Patch 2
+    Build #AI-242.23339.11.2421.12550806, built on October 25, 2024
+    Runtime version: 21.0.3+-12282718-b509.11 amd64
+    VM: OpenJDK 64-Bit Server VM by JetBrains s.r.o.
+    Toolkit: sun.awt.windows.WToolkit
+    Windows 10.0
+    GC: G1 Young Generation, G1 Concurrent GC, G1 Old Generation
+    Memory: 4096M
+    Cores: 4
+    Registry:
+      ide.experimental.ui=true
+      i18n.locale=
+      jdk.updater=false
+爆出版本不支持的错误，编译器无法执行下去。
+1.2、最低支持的 Gradle 版本 4.6，同时调整AGP的版本为3.2.1，同步调整Gradle执行的JAVA版本为1.8
+
+2、执行 Build APK，识别到debug.keystore，签名文件格式不对的问题
+解决方案：使用自定义的 customs_as_key.keystore 的签名文件，
+    signingConfigs {
+        release_config {
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+            storeFile file("${rootProject.projectDir}/signkeystore/customs_as_key.keystore")
+            storePassword 'android'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.release_config
+        }
+
+        release {
+            signingConfig signingConfigs.release_config
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+3、通过JAVA1.8版本下的keytool生成签名文件
+3.1、生成密钥对并存储在PKCS12格式的密钥库中：
+keytool -genkeypair -alias yourAlias -keyalg RSA -keystore yourKeystore.p12 -storetype PKCS12 -storepass yourPassword -validity 365 -keysize 2048
+
+keytool -genkeypair -alias androiddebugkey -keyalg RSA -keystore C:\AndroidProject\GitHub\ScreenRecorder\signkeystore\customs_as_key.keystore -storetype PKCS12 -storepass android -keypass android -validity 36500 -keysize 2048 -dname "CN=William Company, OU=Software Center, O=William Department, L=Shanghai, ST=Shanghai, C=China" -v
+
+在这个命令中：
+-genkeypair：生成一对非对称密钥（公钥和私钥）。
+-alias yourAlias：为密钥对指定一个别名（yourAlias），这个别名在密钥库中用于唯一标识密钥对。
+-keyalg RSA：指定使用RSA算法生成密钥对。
+-keystore yourKeystore.p12：指定密钥库的文件名（yourKeystore.p12）。
+-storetype PKCS12：指定密钥库的格式为PKCS12。
+-storepass yourPassword：设置密钥库的访问密码（yourPassword）。
+-validity 365：设置证书的有效期为365天。
+-keysize 2048：设置密钥的大小为2048位（这是RSA算法的一个常见密钥大小）。
+请注意，-keysize参数在某些版本的keytool中可能不是必需的，因为RSA 2048位通常是默认值。然而，为了明确性和兼容性，最好还是显式地指定它。
+
+3.2、验证密钥库的内容：
+keytool -list -v -keystore C:\AndroidProject\GitHub\ScreenRecorder\signkeystore\customs_as_key.keystore -storetype PKCS12 -storepass android
+
+3.3、导出证书
+如果你需要从密钥库中导出证书，可以使用以下命令：
+keytool -exportcert -alias androiddebugkey -keystore C:\AndroidProject\GitHub\ScreenRecorder\signkeystore\customs_as_key.keystore -storetype PKCS12 -storepass android -file C:\AndroidProject\GitHub\ScreenRecorder\signkeystore\customs_as_keyCertificate.cer -v
+
+这个命令将导出与指定别名（yourAlias）相关联的证书，并将其保存到文件（yourCertificate.cer）中。
+请确保将上述命令中的yourAlias、yourKeystore.p12、yourPassword和yourCertificate.cer替换为你自己的值。
+另外，由于keytool是JDK的一部分，因此你需要确保你的系统已经安装了JDK，并且keytool命令可以在你的命令行或终端中直接运行。
+如果keytool不在你的PATH环境变量中，你需要提供完整的路径来运行它。

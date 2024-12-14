@@ -115,7 +115,7 @@ public class RecordService extends Service {
 
   public String getsaveDirectory() {
     if (Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
-      String rootDir = Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + "ScreenRecord" + "/";
+      String rootDir = Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + "Download" + "/";
 
       File file = new File(rootDir);
       if (!file.exists()) {
